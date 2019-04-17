@@ -230,7 +230,7 @@ if ( cluster.isMaster ) {
 		sslServer.listen( 443 );
 	}
 	let server = require( 'http' ).createServer( app );
-	server.listen( 80 );
+	server.listen( process.env.PORT );
 	app.set( 'json spaces', 0 );
 	app.use( helmet() );
 	//app.use( morgan( 'combined' ) );
