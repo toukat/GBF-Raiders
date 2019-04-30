@@ -267,10 +267,16 @@
 .selected-raids-label {
 	cursor: pointer;
 	margin: 0px !important;
+	text-overflow: ellipsis;
+	overflow: hidden;
+	white-space: nowrap;
 }
 
 .selected-raids-label>.delete.icon {
-	float: right;
+	right: 5px;
+	top: calc(50% - 0.5em);
+	position: absolute;
+	margin: 0 !important;
 }
 
 .smaller>td>.ui.items>.item {
@@ -366,11 +372,21 @@ body:-webkit-full-screen {
 	width: 100%;
 }
 
+.item>div.ui.image>img {
+	max-width: 150px !important;
+	max-height: 100px !important;
+	width: 100% !important;
+	height: 80% !important;
+	object-fit: cover;
+}
+
 td.larger>img {
 	height: 80%;
 	object-fit: cover;
 	object-position: 0 20%;
 	width: 100%;
+	max-width: 300px;
+	max-height: 200px;
 }
 
 @media max-width 1101px and min-width 1092px {

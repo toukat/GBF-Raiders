@@ -260,8 +260,8 @@ function SetupControls() {
 
 		document.getElementById( "local-file-input" ).addEventListener( "change", function () {
 			console.log( "Changing custom sound notif..." );
-			customSoundNotif.src = URL.createObjectURL( this.files[ 0 ] );
-			customSoundNotif.onend = function ( e ) {
+			selectedSoundNotif.src = URL.createObjectURL( this.files[ 0 ] );
+			selectedSoundNotif.onend = function ( e ) {
 				URL.revokeObjectURL( this.src );
 			}
 		} );
@@ -349,6 +349,8 @@ function SetupControls() {
 					for ( var i = 0; i < individualSettings.length; i++ ) {
 						individualSettings[ i ].settings.soundNotifChoice = value;
 					}
+				} else {
+					selectedSoundNotif.src = soundNotifs[ settings.notification.soundNotifChoice ];
 				}
 				localStorage.setItem( "savedSettings", JSON.stringify( settings ) );
 				PlaySoundNotif();

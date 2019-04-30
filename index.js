@@ -9,10 +9,74 @@ const fs = require( 'fs' );
 const cluster = require( 'cluster' );
 const OS = require( 'os' );
 const raidConfigs = require( './raids.json' );
+const raidRooms = raidConfigs.map( raid => raid.room );
+
+let raidsCounter = {};
+
+function objectFlip( obj ) {
+	const ret = {};
+	Object.keys( obj ).forEach( ( key ) => {
+		ret[ obj[ key ] ] = key;
+	} );
+	return ret;
+}
+
+function ResetRaidsCounter() {
+	raidsCounter = Object.assign( {}, raidRooms );
+	raidsCounter = objectFlip( raidsCounter );
+	raidRooms.forEach( function ( room ) {
+		raidsCounter[ room ] = 0;
+	} );
+}
+
+function SortCountersDesc( a, b ) {
+	if ( a.tweeted < b.tweeted ) {
+		return 1;
+	}
+	if ( a.tweeted > b.tweeted ) {
+		return -1;
+	}
+	return 0
+}
+
+function SortRoomsDesc( a, b ) {
+	if ( a.subbed < b.subbed ) {
+		return 1;
+	}
+	if ( a.subbed > b.subbed ) {
+		return -1;
+	}
+	return 0
+}
+
+function ParseCounters() {
+	let rooms = [];
+	rooms = raidRooms.map( room => {
+		return { "room": room, "tweeted": raidsCounter[ room ] };
+	} );
+	rooms.sort( SortCountersDesc );
+	return rooms;
+}
+
+function ParseRooms( rooms ) {
+	let raids = [];
+	raidConfigs.forEach( function ( raid ) {
+		if ( rooms[ raid.room ] ) {
+			raids.push( { "room": raid.room, "subbed": rooms[ raid.room ].length } );
+		}
+	} );
+	raids.sort( SortRoomsDesc );
+	return raids;
+}
 
 if ( cluster.isMaster ) {
 	console.log( "Starting cluster master..." );
 	let io = null;
+	let stats = {
+		connected: 0,
+		tweets: 0
+	};
+	ResetRaidsCounter();
 
 	function SendToWorkers( message ) {
 		for ( const id in cluster.workers ) {
@@ -47,7 +111,7 @@ if ( cluster.isMaster ) {
 		}
 	}
 
-	function searchTextForRaids( text ) {
+	function SearchTextForRaids( text ) {
 		let result = null;
 		for ( let i = 0; i < raidConfigs.length; i++ ) {
 			if ( text.indexOf( raidConfigs[ i ].english ) != -1 || text.indexOf( raidConfigs[ i ].japanese ) != -1 ) {
@@ -107,16 +171,16 @@ if ( cluster.isMaster ) {
 	function IsValidTweet( data ) {
 		let result = false;
 		if ( data.source !== '<a href="http://granbluefantasy.jp/" rel="nofollow">グランブルー ファンタジー</a>' ) {
-			//console.log( "Invalid Tweet Source", data.source );
+			console.log( "Invalid Tweet Source", data.source );
 		} else {
-			if ( searchTextForRaids( data.text ) === null ) {
-				//console.log( "No Raid Name", data.text );
+			if ( SearchTextForRaids( data.text ) === null ) {
+				console.log( "No Raid Name", data.text );
 			} else {
-				if ( DoesTweetContainMessage( data ) && searchTextForRaids( GetTweetMessage( data ).message ) !== null ) {
-					//console.log( "Message Contains Name", data.text );
+				if ( DoesTweetContainMessage( data ) && SearchTextForRaids( GetTweetMessage( data ).message ) !== null ) {
+					console.log( "Message Contains Name", data.text );
 				} else {
 					if ( GetRaidID( data ) === null ) {
-						//console.log( "No Raid ID", data.text );
+						console.log( "No Raid ID", data.text );
 					} else {
 						result = true;
 					}
@@ -131,13 +195,13 @@ if ( cluster.isMaster ) {
 			console.log( `Starting twitter stream, using backup options: ${usingTwitterBackup}` );
 			twitterClient = new twitter( options );
 			twitterClient.on( 'tweet', function ( tweet ) {
-				console.log( "Tweet recieved: " + tweet.id );
+				//console.log( "Tweet recieved: " + tweet.id );
 				if ( IsValidTweet( tweet ) ) {
 					let raidInfo = {
 						id: GetRaidID( tweet ),
 						user: "@" + tweet.user.screen_name,
 						time: tweet.created_at,
-						room: searchTextForRaids( tweet.text ),
+						room: SearchTextForRaids( tweet.text ),
 						message: "No Twitter Message.",
 						language: "JP",
 						timer: 0
@@ -151,6 +215,8 @@ if ( cluster.isMaster ) {
 					}
 					lastTweet = new Date().getTime();
 					io.to( raidInfo.room ).emit( 'tweet', raidInfo );
+					stats.tweets++;
+					raidsCounter[ raidInfo.room ]++;
 				}
 			} );
 			twitterClient.on( 'error', function ( error ) {
@@ -168,9 +234,22 @@ if ( cluster.isMaster ) {
 		}
 	}
 	setInterval( function () {
+		console.log( "Sending stats to workers..." );
+		stats.osuptime = OS.uptime();
+		stats.processuptime = process.uptime().toFixed( 0 );
+		stats.memusage = ( ( 1 - ( OS.freemem() / OS.totalmem() ) ) * 100 ).toFixed( 0 );
+		stats.servertime = new Date().toString();
+		stats.tweets = stats.tweets;
+		stats.mostsubbed = ParseRooms( io.sockets.adapter.rooms ).slice( 0, 3 );
+		stats.mosttweeted = ParseCounters().slice( 0, 3 );
+		SendToWorkers( stats );
+		console.log( stats );
+		stats.tweets = 0;
+		ResetRaidsCounter();
+	}, 60000 );
+	setInterval( function () {
 		if ( new Date().getTime() - 600000 > lastTweet ) {
 			console.log( "No tweets in 10 mins..." );
-			SendToWorkers( { type: 'warning', data: 'twitter' } );
 			try {
 				lastTweet = new Date().getTime();
 				setTimeout( function () {
@@ -206,6 +285,7 @@ if ( cluster.isMaster ) {
 			io = require( 'socket.io' ).listen( server );
 		}
 		io.sockets.on( 'connection', function ( socket ) {
+			stats.connected++;
 			socket.on( 'subscribe',
 				function ( data ) {
 					socket.join( data.room );
@@ -214,12 +294,17 @@ if ( cluster.isMaster ) {
 				function ( data ) {
 					socket.leave( data.room );
 				} );
+			socket.on( 'disconnect',
+				function () {
+					stats.connected--;
+				} );
 		} );
 	} catch ( error ) {
 		console.log( "Error setting up websockets: ", error );
 	}
 	StartTwitterStream( twitterOptions );
 } else {
+	let localStats = {};
 	let app = express();
 	if ( process.env.sslEnabled === "true" ) {
 		const options = {
@@ -229,11 +314,13 @@ if ( cluster.isMaster ) {
 		let sslServer = https.createServer( options, app );
 		sslServer.listen( 443 );
 	}
+	process.on( 'message', function ( msg ) {
+		localStats = msg;
+	} );
 	let server = require( 'http' ).createServer( app );
 	server.listen( process.env.PORT );
 	app.set( 'json spaces', 0 );
 	app.use( helmet() );
-	//app.use( morgan( 'combined' ) );
 	app.use( compression() );
 	app.use( bodyParser.json() );
 	app.use( bodyParser.urlencoded( {
@@ -252,6 +339,13 @@ if ( cluster.isMaster ) {
 	app.get( '/', function ( req, res ) {
 		res.sendFile( __dirname + '/static/index.html' );
 	} );
+	app.get( '/stats', function ( req, res ) {
+		res.header( 'Access-Control-Allow-Origin', '*' );
+		res.header( 'Cache-Control', 'private, no-cache, no-store, must-revalidate' );
+		res.header( 'Expires', '-1' );
+		res.header( 'Pragma', 'no-cache' );
+		res.json( localStats );
+	} );
 	app.use( st( {
 		path: __dirname + '/static',
 		url: '/',
@@ -262,7 +356,7 @@ if ( cluster.isMaster ) {
 		cache: {
 			content: {
 				max: 1024 * 1024 * 64, // how much memory to use on caching contents (bytes * kilo * mega)
-				maxAge: 1000 * 60 * 60 * 24 * 7, // how long to cache contents for (milliseconds * seconds * minutes * hours * days)
+				maxAge: 1000 * 60 * 60 * 24 * 365, // how long to cache contents for (milliseconds * seconds * minutes * hours * days)
 			}
 		},
 		passthrough: true
