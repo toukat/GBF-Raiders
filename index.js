@@ -339,7 +339,7 @@ if ( cluster.isMaster ) {
 		}
 	} );
 	let server = require( 'http' ).createServer( app );
-	server.listen( process.env.PORT );
+	server.listen( process.env.PORT || 80 );
 	app.set( 'json spaces', 0 );
 	app.use( helmet() );
 	app.use( compression() );
