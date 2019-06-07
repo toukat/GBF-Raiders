@@ -1,6 +1,7 @@
 const express = require( 'express' );
 const twitter = require( 'node-tweet-stream' );
 const https = require( 'https' );
+const fetch = require( 'node-fetch' );
 const st = require( 'st' );
 const helmet = require( 'helmet' );
 const bodyParser = require( 'body-parser' );
@@ -12,6 +13,7 @@ const raidConfigs = require( './raids.json' );
 const raidRooms = raidConfigs.map( raid => raid.room );
 
 let raidsCounter = {};
+let isMaintinence = false;
 
 function objectFlip( obj ) {
 	const ret = {};
@@ -235,9 +237,7 @@ if ( cluster.isMaster ) {
 	}
 	setInterval( function () {
 		console.log( "Sending stats to workers..." );
-		stats.osuptime = OS.uptime();
 		stats.processuptime = process.uptime().toFixed( 0 );
-		stats.memusage = ( ( 1 - ( OS.freemem() / OS.totalmem() ) ) * 100 ).toFixed( 0 );
 		stats.servertime = new Date().toString();
 		stats.tweets = stats.tweets;
 		stats.mostsubbed = ParseRooms( io.sockets.adapter.rooms ).slice( 0, 3 );
@@ -248,10 +248,11 @@ if ( cluster.isMaster ) {
 		ResetRaidsCounter();
 	}, 60000 );
 	setInterval( function () {
-		if ( new Date().getTime() - 600000 > lastTweet ) {
+		if ( new Date().getTime() - 600000 > lastTweet && !isMaintinence ) {
 			console.log( "No tweets in 10 mins..." );
 			try {
 				lastTweet = new Date().getTime();
+				io.sockets.emit( 'warning', { type: "twitter", message: "No tweets in 10 mins" } );
 				setTimeout( function () {
 					console.log( "Restarting Twitter Client..." );
 					twitterClient.abort();
@@ -268,6 +269,22 @@ if ( cluster.isMaster ) {
 				console.log( "Twitter Client Restart Error", error );
 			}
 		}
+	}, 60000 );
+	setInterval( function () {
+		console.log( "Checking for maintinence..." );
+		fetch( 'http://game.granbluefantasy.jp' )
+			.then( function ( response ) {
+				if ( response.status == "200" && response.redirected && response.url.includes( "maintenance" ) ) {
+					console.log( "Game is in maintenance." );
+					isMaintinence = true;
+				} else {
+					isMaintinence = false;
+				}
+				io.sockets.emit( 'maint', isMaintinence );
+			} )
+			.catch( function ( error ) {
+				console.log( "Error checking for maintinence:", error );
+			} );
 	}, 60000 );
 	try {
 		console.log( "Setting up websocket server..." );
@@ -286,6 +303,7 @@ if ( cluster.isMaster ) {
 		}
 		io.sockets.on( 'connection', function ( socket ) {
 			stats.connected++;
+			socket.emit( 'maint', isMaintinence );
 			socket.on( 'subscribe',
 				function ( data ) {
 					socket.join( data.room );
@@ -304,7 +322,7 @@ if ( cluster.isMaster ) {
 	}
 	StartTwitterStream( twitterOptions );
 } else {
-	let localStats = {};
+	let localStats = [];
 	let app = express();
 	if ( process.env.sslEnabled === "true" ) {
 		const options = {
@@ -315,7 +333,10 @@ if ( cluster.isMaster ) {
 		sslServer.listen( 443 );
 	}
 	process.on( 'message', function ( msg ) {
-		localStats = msg;
+		localStats.push( msg );
+		if ( localStats.length > 180 ) {
+			localStats.shift();
+		}
 	} );
 	let server = require( 'http' ).createServer( app );
 	server.listen( process.env.PORT );
@@ -340,6 +361,9 @@ if ( cluster.isMaster ) {
 		res.sendFile( __dirname + '/static/index.html' );
 	} );
 	app.get( '/stats', function ( req, res ) {
+		res.sendFile( __dirname + '/static/stats.html' );
+	} );
+	app.get( '/stats.json', function ( req, res ) {
 		res.header( 'Access-Control-Allow-Origin', '*' );
 		res.header( 'Cache-Control', 'private, no-cache, no-store, must-revalidate' );
 		res.header( 'Expires', '-1' );
